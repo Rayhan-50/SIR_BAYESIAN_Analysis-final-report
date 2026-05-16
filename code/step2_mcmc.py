@@ -6,8 +6,13 @@ Observation model: cases(t) ~ NegBin(rho * I(t), phi)
 import numpy as np
 from math import lgamma
 
+# Get the directory of this script for relative paths
+import os
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+
 np.random.seed(42)
-d = np.load("/sessions/eloquent-dreamy-ride/mnt/outputs/step1_data.npz")
+d = np.load(os.path.join(PROJECT_DIR, "outputs", "step1_data.npz"))
 weeks, cases, n_weeks, N = d['weeks'], d['cases'], int(d['n_weeks']), int(d['N'])
 
 def solve_sir(beta, gamma, N, nw):
@@ -132,6 +137,6 @@ for c in range(n_chains):
 # Also store R0 separately
 chains_R0 = np.exp(chains[:, :, 0:1])  # (4, 3000, 1)
 
-np.savez("/sessions/eloquent-dreamy-ride/mnt/outputs/mcmc_results.npz",
+np.savez(os.path.join(PROJECT_DIR, "outputs", "mcmc_results.npz"),
     chains=chains, chains_nat=chains_nat, chains_R0=chains_R0, acc=np.array(all_acc))
 print("Step 2 done.")

@@ -6,9 +6,13 @@ import numpy as np, pandas as pd, matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt, os
 
+# Get the directory of this script for relative paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+
 np.random.seed(42)
-PLOT_DIR = "/sessions/eloquent-dreamy-ride/mnt/outputs/plots"
-DATA_PATH = "/sessions/eloquent-dreamy-ride/mnt/Raihan Rsearch/data/clean_epidemic_dataset_2025.csv"
+PLOT_DIR = os.path.join(PROJECT_DIR, "outputs", "plots")
+DATA_PATH = os.path.join(PROJECT_DIR, "data", "clean_epidemic_dataset_2025.csv")
 os.makedirs(PLOT_DIR, exist_ok=True)
 plt.rcParams.update({'font.family':'serif','font.size':11,'axes.grid':True,'grid.alpha':0.3,'grid.color':'gray','figure.facecolor':'white'})
 

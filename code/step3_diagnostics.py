@@ -3,13 +3,17 @@
 """
 import numpy as np, matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt, json
+import matplotlib.pyplot as plt, json, os
+
+# Get the directory of this script for relative paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 
 np.random.seed(42)
-PLOT_DIR = "/sessions/eloquent-dreamy-ride/mnt/outputs/plots"
-d = np.load("/sessions/eloquent-dreamy-ride/mnt/outputs/step1_data.npz")
+PLOT_DIR = os.path.join(PROJECT_DIR, "outputs", "plots")
+d = np.load(os.path.join(PROJECT_DIR, "outputs", "step1_data.npz"))
 weeks, cases, n_weeks, N = d['weeks'], d['cases'], int(d['n_weeks']), int(d['N'])
-m = np.load("/sessions/eloquent-dreamy-ride/mnt/outputs/mcmc_results.npz")
+m = np.load(os.path.join(PROJECT_DIR, "outputs", "mcmc_results.npz"))
 chains_nat = m['chains_nat']  # (4, 3000, 4) => beta, gamma, rho, phi
 n_chains = chains_nat.shape[0]
 plt.rcParams.update({'font.family': 'serif', 'font.size': 11, 'axes.grid': True,
@@ -224,7 +228,7 @@ results = {
     'ess': {k: float(v) for k, v in ess.items()},
     'fit': {'R2': r2, 'RMSE': rmse}
 }
-with open("/sessions/eloquent-dreamy-ride/mnt/outputs/results.json", 'w') as f:
+with open(os.path.join(PROJECT_DIR, "outputs", "results.json"), 'w') as f:
     json.dump(results, f, indent=2)
 
 print("Step 3 done: All plots 04-10 and results saved.")

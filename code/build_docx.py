@@ -9,9 +9,14 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-PLOT_DIR = "/sessions/eloquent-dreamy-ride/mnt/outputs/plots"
-OUT = "/sessions/eloquent-dreamy-ride/mnt/Raihan Rsearch/SIR_Bayesian_Analysis_Report.docx"
-CODE_DIR = "/sessions/eloquent-dreamy-ride/mnt/outputs"
+# Get the directory of this script for relative paths
+import os
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+
+PLOT_DIR = os.path.join(PROJECT_DIR, "outputs", "plots")
+OUT = os.path.join(PROJECT_DIR, "SIR_Bayesian_Analysis_Report.docx")
+CODE_DIR = os.path.join(PROJECT_DIR, "outputs")
 
 results = json.load(open(f"{CODE_DIR}/results.json"))
 s = results["summary"]
