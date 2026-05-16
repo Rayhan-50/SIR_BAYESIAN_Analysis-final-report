@@ -1,0 +1,10 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.rds
+.DS_Store
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+outputs/results.json
