@@ -88,3 +88,4 @@ Stan's `ode_rk45` integrator is used to solve the ODE system within the model bl
 - Carpenter et al. (2017). Stan: A probabilistic programming language. *Journal of Statistical Software*, 76(1).
 - Gabry et al. (2019). Visualization in Bayesian workflow. *JRSS-A*, 182(2), 389–402.
 - Kermack & McKendrick (1927). A contribution to the mathematical theory of epidemics. *Proc. Royal Soc. A*, 115, 700–721.
+# SIR_Bayesian_Analysis_Reporting
