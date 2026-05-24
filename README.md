@@ -13,6 +13,18 @@ We fit a four-parameter SIR model to weekly case counts from a 2025 epidemic (N 
 | Parameter | Median | 95% CI |
 |-----------|--------|--------|
 | R0        | 1.44   | [1.31, 1.65] |
+
+
+
+
+
+
+
+
+
+
+
+
 | beta      | 0.95   | [0.80, 1.14] |
 | gamma     | 0.66   | [0.49, 0.86] |
 | rho       | 0.079  | [0.049, 0.131] |
