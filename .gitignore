@@ -8,3 +8,6 @@ __pycache__/
 *.egg-info/
 .env
 outputs/results.json
+
+# R scratch output
+Rplots.pdf
