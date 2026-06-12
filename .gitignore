@@ -1,13 +1,44 @@
+# ============================================================
+# R Project – .gitignore
+# ============================================================
+
+# --- R session artefacts ---
 .Rhistory
 .RData
 .Rproj.user/
+*.Rproj
+Rplots.pdf
+
+# --- R compiled / binary output ---
 *.rds
+*.RData
+*.so
+*.dll
+
+# --- Local R package library (never commit; reinstall via install_packages.R) ---
+r_library/
+
+# --- Large installer binaries ---
+*.exe
+*.msi
+
+# --- Generated output files (reproducible from code) ---
+outputs/
+plots/
+*.pdf
+*.docx
+*.xlsx
+
+# --- OS junk ---
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Python junk (if any) ---
 __pycache__/
 *.pyc
 *.egg-info/
 .env
-outputs/results.json
 
-# R scratch output
-Rplots.pdf
+# --- Stan / rstan cache ---
+*.stan_model_cache

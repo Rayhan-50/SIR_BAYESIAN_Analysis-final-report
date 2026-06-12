@@ -20,14 +20,16 @@ suppressPackageStartupMessages({
 })
 
 rstan_options(auto_write = TRUE)
-options(mc.cores = 4)
+options(mc.cores = min(parallel::detectCores(), 4))
 
 # ── Project paths ─────────────────────────────────────────────────────────────
-proj_dir  <- normalizePath(file.path(dirname(sys.frame(1)$ofile), ".."),
-                           mustWork = FALSE)
-# Fallback if run interactively
-if (!nchar(proj_dir) || !dir.exists(proj_dir))
-  proj_dir <- getwd()
+# Use script location if available, else fall back to working directory
+proj_dir <- tryCatch(
+  normalizePath(file.path(dirname(sys.frame(1)$ofile), ".."), mustWork = TRUE),
+  error = function(e) getwd()
+)
+if (!dir.exists(proj_dir)) proj_dir <- getwd()
+cat(sprintf("Project dir: %s\n", proj_dir))
 
 stan_file <- file.path(proj_dir, "code", "sir_model.stan")
 out_dir   <- file.path(proj_dir, "outputs")
@@ -51,7 +53,7 @@ sites <- list(
   list(
     label    = "SARI",
     csv      = file.path(proj_dir, "data", "site_SARI.csv"),
-    pop      = 500000L,
+    pop      = 40000L,   # hospital catchment population (adjusted from 500k)
     desc     = "Severe Acute Respiratory Infection (SARI) Sentinel"
   )
 )
