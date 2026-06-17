@@ -8,7 +8,7 @@ options(repos = c(CRAN = "https://cloud.r-project.org"))
 
 pkgs <- c("deSolve", "ggplot2", "bayesplot", "gridExtra",
           "jsonlite", "dplyr", "tidyr", "GGally", "officer",
-          "readxl", "scales", "patchwork")
+          "readxl", "scales", "patchwork", "loo")
 
 cat("=== Installing CRAN packages ===\n")
 for (p in pkgs) {

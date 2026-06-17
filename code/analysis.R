@@ -1,10 +1,22 @@
 # Bayesian SIR Model Analysis — Raihan Research Group
-# Epidemic dataset 2025: weekly case counts
+# Dataset: Community Surveillance (clean_epidemic_dataset_2025.csv)
+# Population: N = 11,750 (community catchment)
+#
+# NOTE ON DATA IDENTITY:
+#   This script analyses the PRIMARY COMMUNITY SURVEILLANCE STREAM, which is
+#   an independent reporting system from the three sentinel sites (ILI, Severe,
+#   SARI). The community dataset is NOT the arithmetic sum of sentinel sites.
+#   ILI and Severe share the same catchment (N=11,750) so summing them would
+#   double-count. Each surveillance stream is analysed independently.
+#
+#   For data provenance run: Rscript code/prepare_data.R
+#
 # Model: incidence-based SIR + background rate (lambda)
 # Cases[t] ~ NegBin(rho * new_infections[t] + lambda, phi)
 
 suppressPackageStartupMessages({
   library(rstan)
+  library(loo)
   library(deSolve)
   library(ggplot2)
   library(bayesplot)
@@ -19,7 +31,10 @@ rstan_options(auto_write = TRUE)
 options(mc.cores = 4)
 
 # ── Directories ───────────────────────────────────────────────────────────────
-proj_dir  <- "/Users/yusuf/Downloads/rnh/SIR_BAYESIAN_Analysis-final-report"
+proj_dir <- tryCatch(
+  normalizePath(file.path(dirname(sys.frame(1)$ofile), ".."), mustWork = TRUE),
+  error = function(e) getwd()
+)
 plots_dir <- file.path(proj_dir, "plots")
 out_dir   <- file.path(proj_dir, "outputs")
 dir.create(plots_dir, showWarnings = FALSE)
@@ -47,9 +62,14 @@ dat <- read.csv(file.path(proj_dir, "data/clean_epidemic_dataset_2025.csv"),
                 stringsAsFactors = FALSE)
 dat$date <- as.Date(dat$date)
 
-N      <- 11750L
+N      <- 11750L   # Community catchment (documented in prepare_data.R)
 n_wks  <- nrow(dat)
 cases  <- dat$cases
+
+# Validate: community data should start near zero (SIR assumption)
+if (dat$cases[1] > 10) {
+  warning("Week-1 cases > 10: check SIR near-zero start assumption.")
+}
 
 cat("=== Dataset Summary ===\n")
 cat(sprintf("Weeks       : %d\n",      n_wks))
@@ -120,14 +140,29 @@ cat("Plot 03 saved.\n")
 cat("\n=== Compiling Stan model ===\n")
 stan_file <- file.path(proj_dir, "code/sir_model.stan")
 
+# Baseline prior hyperparameters (must match sir_model.stan documentation)
+baseline_priors <- list(
+  R0_mu       = log(2.0), R0_sigma     = 0.3,
+  gamma_mu    = log(0.5), gamma_sigma  = 0.3,
+  rho_alpha   = 2,        rho_beta     = 10,
+  phi_rate    = 0.5,
+  I0_mu       = log(1),   I0_sigma     = 2.0,
+  lambda_rate = 0.5
+)
+
+stan_data <- c(
+  list(N_weeks = n_wks, cases = cases, pop = as.double(N)),
+  baseline_priors
+)
+
 fit <- stan(
   file    = stan_file,
-  data    = list(N_weeks = n_wks, cases = cases, pop = as.double(N)),
+  data    = stan_data,
   chains  = 4,
-  iter    = 2000,
-  warmup  = 1000,
+  iter    = 3000,
+  warmup  = 1500,
   seed    = 12345,
-  control = list(adapt_delta = 0.95, max_treedepth = 14),
+  control = list(adapt_delta = 0.98, max_treedepth = 15),
   refresh = 200
 )
 
@@ -140,20 +175,30 @@ print(round(diag_df, 4))
 rhat_vals <- diag_df[,"Rhat"]
 neff_vals <- diag_df[,"n_eff"]
 
-cat("\n--- R-hat check ---\n")
-if (all(rhat_vals < 1.05, na.rm = TRUE)) {
-  cat("PASS: All R-hat < 1.05\n")
+cat("\n--- R-hat check (threshold 1.01, Vehtari et al. 2021) ---\n")
+if (all(rhat_vals < 1.01, na.rm = TRUE)) {
+  cat("PASS: All R-hat < 1.01\n")
+} else if (all(rhat_vals < 1.05, na.rm = TRUE)) {
+  warning("WARN: R-hat in [1.01, 1.05) — borderline convergence, consider more iterations")
+  print(rhat_vals[rhat_vals >= 1.01])
 } else {
-  warning("FAIL: Some R-hat >= 1.05 — chains may not have converged!")
+  warning("FAIL: Some R-hat >= 1.05 — chains have not converged!")
   print(rhat_vals[rhat_vals >= 1.05])
 }
-cat("--- ESS check ---\n")
-if (all(neff_vals > 400, na.rm = TRUE)) {
-  cat("PASS: All n_eff > 400\n")
+cat("--- ESS check (min 1000 recommended for quantile estimation) ---\n")
+if (all(neff_vals > 1000, na.rm = TRUE)) {
+  cat("PASS: All n_eff > 1000\n")
+} else if (all(neff_vals > 400, na.rm = TRUE)) {
+  cat("WARN: Some n_eff in [400, 1000) — adequate but marginal for tails:\n")
+  print(neff_vals[neff_vals <= 1000])
 } else {
-  cat("WARNING: Some n_eff <= 400:\n")
+  cat("FAIL: Some n_eff <= 400:\n")
   print(neff_vals[neff_vals <= 400])
 }
+
+# Check for divergent transitions
+n_div <- get_num_divergent(fit)
+if (n_div > 0) warning(sprintf("DIVERGENCES: %d divergent transitions detected!", n_div))
 
 # ── 4. Extract posterior samples ──────────────────────────────────────────────
 post <- rstan::extract(fit)
@@ -282,7 +327,27 @@ pp_df <- data.frame(week = 1:n_wks,
 ss_res <- sum((cases - mu_med)^2)
 ss_tot <- sum((cases - mean(cases))^2)
 R2 <- 1 - ss_res / ss_tot
-cat(sprintf("\nPosterior predictive R² = %.3f\n", R2))
+cat(sprintf("\nPosterior predictive R² = %.3f  (note: supplementary metric only)\n", R2))
+
+# ── LOO-CV (Vehtari et al. 2017 — primary model evaluation metric) ────────────
+cat("\n=== LOO Cross-Validation ===\n")
+log_lik_mat <- extract_log_lik(fit, parameter_name = "log_lik", merge_chains = FALSE)
+loo_result  <- loo(log_lik_mat, r_eff = relative_eff(exp(log_lik_mat)))
+cat("\nLOO summary:\n")
+print(loo_result)
+loo_elpd    <- loo_result$estimates["elpd_loo", "Estimate"]
+loo_se      <- loo_result$estimates["elpd_loo", "SE"]
+cat(sprintf("\nELPD_LOO = %.2f (SE = %.2f)\n", loo_elpd, loo_se))
+
+# Flag any Pareto k > 0.7 (unreliable observations)
+k_vals  <- loo_result$pointwise[, "influence_pareto_k"]
+n_bad_k <- sum(k_vals > 0.7)
+if (n_bad_k > 0) {
+  cat(sprintf("WARNING: %d observations have Pareto k > 0.7 (weeks: %s)\n",
+              n_bad_k, paste(which(k_vals > 0.7), collapse = ", ")))
+} else {
+  cat("PASS: All Pareto k < 0.7 — LOO estimates reliable\n")
+}
 
 p07 <- ggplot(pp_df, aes(x = week)) +
   geom_ribbon(aes(ymin = lo90, ymax = hi90), fill = "#CCCCCC", alpha = 0.7) +
@@ -378,10 +443,18 @@ results_list <- list(
   ),
   R0  = list(mean=mean(R0_post), sd=sd(R0_post),
              q2.5=q(R0_post,.025), q50=q(R0_post,.5), q97.5=q(R0_post,.975)),
-  fit = list(R2=R2, RMSE=sqrt(mean(resid_df$residual^2)))
+  fit = list(
+    R2   = R2,
+    RMSE = sqrt(mean(resid_df$residual^2)),
+    elpd_loo = loo_elpd,
+    elpd_loo_se = loo_se,
+    n_pareto_k_bad = n_bad_k
+  )
 )
+
+results_list$N_label <- "Community catchment population (independent from sentinel sites)"
 
 write(toJSON(results_list, auto_unbox = TRUE, pretty = TRUE),
       file.path(out_dir, "results_R.json"))
 cat("\nResults saved to outputs/results_R.json\n")
-cat("\n=== Analysis complete ===\n")
+cat("\n=== Community surveillance analysis complete ===\n")

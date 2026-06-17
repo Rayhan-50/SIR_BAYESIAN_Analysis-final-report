@@ -16,21 +16,29 @@ suppressPackageStartupMessages({
 })
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-proj_dir  <- "/Users/yusuf/Downloads/rnh/SIR_BAYESIAN_Analysis-final-report"
+proj_dir <- tryCatch(
+  normalizePath(file.path(dirname(sys.frame(1)$ofile), ".."), mustWork = TRUE),
+  error = function(e) getwd()
+)
 plots_dir <- file.path(proj_dir, "plots")
 out_dir   <- file.path(proj_dir, "outputs")
 dir.create(plots_dir, showWarnings = FALSE)
+
+# ── Load posterior results FIRST (so N comes from the model, not hardcoded) ───
+res        <- fromJSON(file.path(out_dir, "results_R.json"))
+
+# ── N comes from the JSON output — never hardcode this ────────────────────────
+N <- as.integer(res$N)
+cat(sprintf("Population N read from results_R.json: %d\n", N))
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 dat   <- read.csv(file.path(proj_dir, "data/clean_epidemic_dataset_2025.csv"),
                   stringsAsFactors = FALSE)
 dat$date <- as.Date(dat$date)
-N     <- 11750L
 cases <- dat$cases
 n_wks <- nrow(dat)
 
-# ── Load posterior results ────────────────────────────────────────────────────
-res        <- fromJSON(file.path(out_dir, "results_R.json"))
+# ── Extract posterior summaries ──────────────────────────────────────────────
 beta_med   <- res$summary$beta$q50
 gamma_med  <- res$summary$gamma$q50
 rho_med    <- res$summary$rho$q50

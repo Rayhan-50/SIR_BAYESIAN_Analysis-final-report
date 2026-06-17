@@ -24,6 +24,25 @@ data {
   int<lower=1> N_weeks;
   array[N_weeks] int<lower=0> cases;
   real<lower=0> pop;
+
+  // Prior hyperparameters — passed in as data for sensitivity analysis.
+  // Baseline values (matching original model):
+  //   R0_mu=log(2.0), R0_sigma=0.3
+  //   gamma_mu=log(0.5), gamma_sigma=0.3
+  //   rho_alpha=2, rho_beta=10
+  //   phi_rate=0.5
+  //   I0_mu=log(1), I0_sigma=2.0
+  //   lambda_rate=0.5
+  real          R0_mu;
+  real<lower=0> R0_sigma;
+  real          gamma_mu;
+  real<lower=0> gamma_sigma;
+  real<lower=0> rho_alpha;
+  real<lower=0> rho_beta;
+  real<lower=0> phi_rate;
+  real          I0_mu;
+  real<lower=0> I0_sigma;
+  real<lower=0> lambda_rate;
 }
 
 transformed data {
@@ -39,8 +58,8 @@ parameters {
   real<lower=0>          gamma;
   real<lower=0, upper=1> rho;
   real<lower=0>          phi;
-  real<lower=0.001>      I0;      // initial seed — fractional allowed in ODE
-  real<lower=0>          lambda;  // background sporadic cases per week
+  real<lower=0.001>      I0;
+  real<lower=0>          lambda;
 }
 
 transformed parameters {
@@ -55,14 +74,14 @@ transformed parameters {
   array[N_weeks] vector[3] y_sol;
   y_sol = ode_rk45(sir_ode, y0, t0, ts, theta, x_r, x_i);
 
-  // Incidence = new infections per week = decrease in susceptibles
+  // Incidence = new infections per week = decrease in susceptibles (flow, not stock)
   array[N_weeks] real incidence;
   incidence[1] = fmax(1e-6, (pop - I0) - y_sol[1][1]);
   for (i in 2:N_weeks) {
     incidence[i] = fmax(1e-6, y_sol[i-1][1] - y_sol[i][1]);
   }
 
-  // Expected cases = epidemic incidence + background rate
+  // Expected cases: epidemic incidence scaled by reporting rate + background
   array[N_weeks] real mu;
   for (i in 1:N_weeks) {
     mu[i] = fmax(1e-6, rho * incidence[i] + lambda);
@@ -70,13 +89,12 @@ transformed parameters {
 }
 
 model {
-  // Priors
-  R0     ~ lognormal(log(2.0),  0.3);   // median R0=2, allows 1.1–3.5
-  gamma  ~ lognormal(log(0.5),  0.3);   // ~2-week infectious period
-  rho    ~ beta(2, 10);                  // reporting ~17% mean
-  phi    ~ exponential(0.5);
-  I0     ~ lognormal(log(1),    2.0);   // wide prior: allows 0.001–100
-  lambda ~ exponential(0.5);             // mean 2 background cases/wk
+  R0     ~ lognormal(R0_mu,     R0_sigma);
+  gamma  ~ lognormal(gamma_mu,  gamma_sigma);
+  rho    ~ beta(rho_alpha,      rho_beta);
+  phi    ~ exponential(phi_rate);
+  I0     ~ lognormal(I0_mu,     I0_sigma);
+  lambda ~ exponential(lambda_rate);
 
   for (i in 1:N_weeks) {
     cases[i] ~ neg_binomial_2(mu[i], phi);

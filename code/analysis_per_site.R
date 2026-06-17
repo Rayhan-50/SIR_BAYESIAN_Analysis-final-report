@@ -9,6 +9,7 @@
 
 suppressPackageStartupMessages({
   library(rstan)
+  library(loo)
   library(deSolve)
   library(ggplot2)
   library(bayesplot)
@@ -49,12 +50,6 @@ sites <- list(
     csv      = file.path(proj_dir, "data", "site_Severe.csv"),
     pop      = 11750L,
     desc     = "Severe/Hospital Sentinel"
-  ),
-  list(
-    label    = "SARI",
-    csv      = file.path(proj_dir, "data", "site_SARI.csv"),
-    pop      = 40000L,   # hospital catchment population (adjusted from 500k)
-    desc     = "Severe Acute Respiratory Infection (SARI) Sentinel"
   )
 )
 
@@ -131,6 +126,17 @@ for (site in sites) {
     next
   }
 
+  # ── Data quality checks ─────────────────────────────────────────────────────
+  # 1. Stair-step artifact check (monthly data divided by 4)
+  rle_obj <- rle(cases)
+  max_run <- max(rle_obj$lengths[rle_obj$values > 0])
+  if (max_run >= 3) {
+    cat(sprintf("*** WARNING [%s]: Stair-step artifact detected.\n", site_label))
+    cat(sprintf("    Longest run of identical nonzero values: %d weeks.\n", max_run))
+    cat("    This may indicate monthly data interpolated to weekly.\n")
+    cat("    Acknowledge in manuscript Limitations section.\n\n")
+  }
+
   cat(sprintf("Weeks       : %d\n",      n_wks))
   cat(sprintf("Total cases : %d\n",      sum(cases)))
   cat(sprintf("Peak cases  : %d (week %d)\n", max(cases), which.max(cases) - 1))
@@ -148,49 +154,30 @@ for (site in sites) {
   save_plot(p01, file.path(plots_dir, "01_raw_data.png"))
   cat("Plot 01 saved.\n")
 
-  # ── Plot 02: SIR compartments (prior medians as placeholder) ─────────────────
-  beta_med  <- 0.955; gamma_med <- 0.659; rho_med <- 0.080
-  sol <- solve_sir(beta_med, gamma_med, n_wks, N)
-  sol_df <- as.data.frame(sol) %>%
-    filter(time >= 1) %>%
-    mutate(week = time, Observed_x_rho = rho_med * I) %>%
-    rename(Susceptible = S, Infectious = I, Recovered = R) %>%
-    select(week, Susceptible, Infectious, Recovered, Observed_x_rho)
-
-  comp_long <- sol_df %>%
-    pivot_longer(cols = c(Susceptible, Infectious, Recovered),
-                 names_to = "Compartment", values_to = "Count")
-
-  scale_factor <- max(sol_df$Susceptible) / max(cases, 1)
-
-  p02 <- ggplot() +
-    geom_line(data = comp_long,
-              aes(x = week, y = Count, linetype = Compartment), linewidth = 0.8) +
-    geom_point(data = data.frame(week = 1:n_wks, cases = cases * scale_factor),
-               aes(x = week, y = cases), shape = 1, size = 2, color = "black") +
-    scale_linetype_manual(values = c(Susceptible = "solid",
-                                     Infectious   = "dashed",
-                                     Recovered    = "dotdash")) +
-    labs(
-      title    = sprintf("[%s] SIR Compartments (prior medians)", site_label),
-      subtitle = "Open circles = observed cases (scaled for display)",
-      x = "Week", y = "Compartment count", linetype = ""
-    ) + bw_theme + theme(legend.position = "bottom")
-  save_plot(p02, file.path(plots_dir, "02_sir_compartments.png"), w = 8, h = 5)
-  cat("Plot 02 saved.\n")
+  # Plot 02 is generated after Stan fitting using posterior medians (see below)
 
   # ── Plot 03: Prior predictive check ──────────────────────────────────────────
+  # Priors MUST match sir_model.stan exactly:
+  #   R0    ~ lognormal(log(2.0), 0.3)
+  #   gamma ~ lognormal(log(0.5), 0.3)
+  #   rho   ~ beta(2, 10)
+  #   lambda ~ exponential(0.5)
+  # Observation model: mu(t) = rho * incidence(t) + lambda
+  #   where incidence(t) = S(t-1) - S(t)  [new infections per week]
   set.seed(42)
   n_prior <- 200
   prior_curves <- lapply(seq_len(n_prior), function(i) {
-    R0_s    <- rlnorm(1, log(1.7),  0.25)
-    gamma_s <- rlnorm(1, log(0.44), 0.3)
-    rho_s   <- rlnorm(1, log(0.05), 0.5)
-    beta_s  <- R0_s * gamma_s
+    R0_s     <- rlnorm(1, log(2.0), 0.3)
+    gamma_s  <- rlnorm(1, log(0.5), 0.3)
+    rho_s    <- rbeta(1, 2, 10)
+    lambda_s <- rexp(1, 0.5)
+    beta_s   <- R0_s * gamma_s
     tryCatch({
-      sol_s <- solve_sir(beta_s, gamma_s, n_wks, N)
-      mu_s  <- rho_s * sol_s[-1, "I"]
-      mu_s  <- pmax(mu_s, 1e-6)
+      sol_s  <- solve_sir(beta_s, gamma_s, n_wks, N)
+      sol_df_s <- as.data.frame(sol_s)
+      S_vec  <- sol_df_s$S
+      inc    <- pmax(c(S_vec[1] - S_vec[2], -diff(S_vec[-1])), 1e-6)
+      mu_s   <- pmax(rho_s * inc + lambda_s, 1e-6)
       data.frame(week = 1:n_wks, mu = mu_s, draw = i)
     }, error = function(e) NULL)
   })
@@ -204,57 +191,141 @@ for (site in sites) {
     coord_cartesian(ylim = c(0, max(cases) * 5)) +
     labs(
       title    = sprintf("[%s] Prior Predictive Check", site_label),
-      x = "Week", y = "Expected cases (rho * I(t))"
+      subtitle = "mu(t) = rho * incidence(t) + lambda  [incidence = S(t-1) - S(t)]",
+      x = "Week", y = "Expected cases"
     ) + bw_theme
   save_plot(p03, file.path(plots_dir, "03_prior_predictive.png"))
   cat("Plot 03 saved.\n")
 
   # ── 4. Fit Stan model ─────────────────────────────────────────────────────────
   cat(sprintf("\n=== Fitting Stan model for %s ===\n", site_label))
+  baseline_priors <- list(
+    R0_mu       = log(2.0), R0_sigma     = 0.3,
+    gamma_mu    = log(0.5), gamma_sigma  = 0.3,
+    rho_alpha   = 2,        rho_beta     = 10,
+    phi_rate    = 0.5,
+    I0_mu       = log(1),   I0_sigma     = 2.0,
+    lambda_rate = 0.5
+  )
+
+  stan_data <- c(
+    list(N_weeks = n_wks, cases = cases, pop = as.double(N)),
+    baseline_priors
+  )
+
   fit <- sampling(
     stan_model_obj,
-    data    = list(N_weeks = n_wks, cases = cases, pop = as.double(N)),
+    data    = stan_data,
     chains  = 4,
-    iter    = 2000,
-    warmup  = 1000,
+    iter    = 3000,
+    warmup  = 1500,
     seed    = 12345,
-    control = list(adapt_delta = 0.9, max_treedepth = 12),
+    control = list(adapt_delta = 0.98, max_treedepth = 15),
     refresh = 200
   )
 
   # ── Convergence diagnostics ───────────────────────────────────────────────────
   cat(sprintf("\n=== Convergence Diagnostics [%s] ===\n", site_label))
   sum_fit <- summary(fit)$summary
-  params  <- c("R0", "gamma", "rho", "phi", "beta")
+  params  <- c("R0", "gamma", "rho", "phi", "beta", "I0", "lambda")
   diag_df <- sum_fit[params, c("mean","sd","2.5%","50%","97.5%","n_eff","Rhat")]
   print(round(diag_df, 4))
 
   rhat_vals <- diag_df[,"Rhat"]
   neff_vals <- diag_df[,"n_eff"]
 
-  cat("\n--- R-hat check ---\n")
-  if (all(rhat_vals < 1.05, na.rm = TRUE)) {
-    cat("PASS: All R-hat < 1.05\n")
+  cat("\n--- R-hat check (threshold 1.01, Vehtari et al. 2021) ---\n")
+  if (all(rhat_vals < 1.01, na.rm = TRUE)) {
+    cat("PASS: All R-hat < 1.01\n")
+  } else if (all(rhat_vals < 1.05, na.rm = TRUE)) {
+    warning(sprintf("[%s] WARN: R-hat in [1.01, 1.05) — consider more iterations", site_label))
+    print(rhat_vals[rhat_vals >= 1.01])
   } else {
     warning(sprintf("[%s] FAIL: Some R-hat >= 1.05", site_label))
     print(rhat_vals[rhat_vals >= 1.05])
   }
 
-  cat("--- ESS check ---\n")
-  if (all(neff_vals > 400, na.rm = TRUE)) {
-    cat("PASS: All n_eff > 400\n")
+  cat("--- ESS check (min 1000 recommended) ---\n")
+  if (all(neff_vals > 1000, na.rm = TRUE)) {
+    cat("PASS: All n_eff > 1000\n")
+  } else if (all(neff_vals > 400, na.rm = TRUE)) {
+    cat("WARN: Some n_eff in [400, 1000):\n")
+    print(neff_vals[neff_vals <= 1000])
   } else {
-    cat("WARNING: Some n_eff <= 400:\n")
+    cat("FAIL: Some n_eff <= 400:\n")
     print(neff_vals[neff_vals <= 400])
   }
 
+  n_div <- get_num_divergent(fit)
+  if (n_div > 0) warning(sprintf("[%s] DIVERGENCES: %d divergent transitions!", site_label, n_div))
+
   # ── 5. Extract posterior samples ──────────────────────────────────────────────
-  post       <- rstan::extract(fit)
-  beta_post  <- post$beta
-  gamma_post <- post$gamma
-  rho_post   <- post$rho
-  phi_post   <- post$phi
-  R0_post    <- post$R0
+  post        <- rstan::extract(fit)
+  beta_post   <- post$beta
+  gamma_post  <- post$gamma
+  rho_post    <- post$rho
+  phi_post    <- post$phi
+  R0_post     <- post$R0
+  I0_post     <- post$I0
+  lambda_post <- post$lambda
+
+  beta_med   <- median(beta_post)
+  gamma_med  <- median(gamma_post)
+  rho_med    <- median(rho_post)
+  I0_med     <- median(I0_post)
+  lambda_med <- median(lambda_post)
+
+  # ── LOO-CV ────────────────────────────────────────────────────────────────────
+  cat(sprintf("\n=== LOO Cross-Validation [%s] ===\n", site_label))
+  log_lik_mat <- extract_log_lik(fit, parameter_name = "log_lik", merge_chains = FALSE)
+  loo_res     <- loo(log_lik_mat, r_eff = relative_eff(exp(log_lik_mat)))
+  print(loo_res)
+  loo_elpd    <- loo_res$estimates["elpd_loo", "Estimate"]
+  loo_se      <- loo_res$estimates["elpd_loo", "SE"]
+  k_vals      <- loo_res$pointwise[, "influence_pareto_k"]
+  n_bad_k     <- sum(k_vals > 0.7)
+  if (n_bad_k > 0) cat(sprintf("WARNING: %d observations with Pareto k > 0.7\n", n_bad_k))
+
+  # ── Plot 02: SIR compartments with posterior medians (incidence-based) ────────
+  sol_p <- solve_sir(beta_med, gamma_med, n_wks, N)
+  sol_pdf <- as.data.frame(sol_p) %>% filter(time >= 0)
+  S_full <- sol_pdf$S
+  incidence_fit <- pmax(c(S_full[1] - S_full[2], -diff(S_full[-1])), 1e-6)
+  fitted_cases  <- rho_med * incidence_fit + lambda_med
+
+  comp_long2 <- as.data.frame(sol_p) %>%
+    filter(time >= 1) %>%
+    mutate(week = time) %>%
+    rename(Susceptible = S, Infectious = I, Recovered = R) %>%
+    select(week, Susceptible, Infectious, Recovered) %>%
+    pivot_longer(cols = c(Susceptible, Infectious, Recovered),
+                 names_to = "Compartment", values_to = "Count")
+
+  p02 <- ggplot() +
+    geom_line(data = comp_long2,
+              aes(x = week, y = Count, linetype = Compartment), linewidth = 0.8) +
+    geom_line(data = data.frame(week = 1:n_wks, fitted = fitted_cases),
+              aes(x = week, y = fitted * (N / max(fitted_cases))),
+              linetype = "dotted", linewidth = 1.0, color = "black") +
+    geom_point(data = data.frame(week = 1:n_wks,
+                                 obs = cases * (N / max(fitted_cases))),
+               aes(x = week, y = obs), shape = 1, size = 2, color = "black") +
+    scale_y_continuous(
+      name = "Compartment count",
+      sec.axis = sec_axis(~ . / (N / max(fitted_cases)),
+                          name = "Cases / fitted (rho * incidence + lambda)")
+    ) +
+    scale_linetype_manual(values = c(Susceptible = "solid",
+                                     Infectious   = "dashed",
+                                     Recovered    = "dotdash")) +
+    labs(
+      title    = sprintf("[%s] SIR Compartments (posterior medians)", site_label),
+      subtitle = sprintf("R0=%.2f | beta=%.3f | gamma=%.3f | rho=%.3f | lambda=%.2f",
+                         median(R0_post), beta_med, gamma_med, rho_med, lambda_med),
+      x = "Week", linetype = ""
+    ) + bw_theme + theme(legend.position = "bottom")
+  save_plot(p02, file.path(plots_dir, "02_sir_compartments.png"), w = 8, h = 5)
+  cat("Plot 02 saved.\n")
 
   # ── Plot 04: Trace plots ────────────────────────────────────────────────────
   posterior_arr <- as.array(fit, pars = c("R0","gamma","rho","phi"))
@@ -413,15 +484,29 @@ for (site in sites) {
                    q2.5 = q(rho_post,0.025), q50 = q(rho_post,0.5),
                    q97.5 = q(rho_post,0.975),
                    rhat = diag_df["rho","Rhat"], ess = diag_df["rho","n_eff"]),
-      phi   = list(mean = mean(phi_post),   sd = sd(phi_post),
-                   q2.5 = q(phi_post,0.025), q50 = q(phi_post,0.5),
-                   q97.5 = q(phi_post,0.975),
-                   rhat = diag_df["phi","Rhat"], ess = diag_df["phi","n_eff"])
+      phi    = list(mean = mean(phi_post),    sd = sd(phi_post),
+                    q2.5 = q(phi_post,0.025), q50 = q(phi_post,0.5),
+                    q97.5 = q(phi_post,0.975),
+                    rhat = diag_df["phi","Rhat"], ess = diag_df["phi","n_eff"]),
+      I0     = list(mean = mean(I0_post),     sd = sd(I0_post),
+                    q2.5 = q(I0_post,0.025),  q50 = q(I0_post,0.5),
+                    q97.5 = q(I0_post,0.975),
+                    rhat = diag_df["I0","Rhat"], ess = diag_df["I0","n_eff"]),
+      lambda = list(mean = mean(lambda_post), sd = sd(lambda_post),
+                    q2.5 = q(lambda_post,0.025), q50 = q(lambda_post,0.5),
+                    q97.5 = q(lambda_post,0.975),
+                    rhat = diag_df["lambda","Rhat"], ess = diag_df["lambda","n_eff"])
     ),
     R0  = list(mean = mean(R0_post), sd = sd(R0_post),
                q2.5 = q(R0_post,0.025), q50 = q(R0_post,0.5),
                q97.5 = q(R0_post,0.975)),
-    fit = list(R2 = R2, RMSE = sqrt(mean(resid_df$residual^2)))
+    fit = list(
+      R2           = R2,
+      RMSE         = sqrt(mean(resid_df$residual^2)),
+      elpd_loo     = loo_elpd,
+      elpd_loo_se  = loo_se,
+      n_pareto_k_bad = n_bad_k
+    )
   )
 
   json_path <- file.path(out_dir, sprintf("results_%s.json", site_label))
